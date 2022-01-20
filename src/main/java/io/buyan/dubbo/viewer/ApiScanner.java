@@ -37,8 +37,6 @@ public class ApiScanner {
 
     private Map<String, String> fileTranslateError = new HashMap<>();
 
-    private boolean simpleMode;
-
     public ApiScanner(File[] files, String... basePackages) {
         if (null == files) {
             return;
@@ -69,16 +67,19 @@ public class ApiScanner {
     }
 
     private boolean isClassInBasePackages(String name) {
+        if (packages.isEmpty()) {
+            return true;
+        }
         Optional<String> exists = packages.stream().filter(name::startsWith).findAny();
         return exists.isPresent();
     }
 
     /**
      * 对所有的 jar 包进行扫描，分析出所有的接口及其方法
+     *
      * @return 结构化的 Dubbo 接口定义
      */
-    public ParsedResult scanApi(boolean simpleMode) {
-        this.simpleMode = simpleMode;
+    public ParsedResult scanApi() {
         ParsedResult parsedResult = new ParsedResult();
         // 查找要解析的 Dubbo 接口
         Map<String, List<String>> jarClasses = new HashMap<>();
@@ -104,26 +105,21 @@ public class ApiScanner {
         ApiClassLoader classLoader = new ApiClassLoader(urls);
         // 按 jar 包范围逐一扫描 Dubbo 接口
         jarClasses.forEach((jarName, classes) -> {
-            List<String> canNotLoadClass = new ArrayList<>();
-            List<String> noMethodClass = new ArrayList<>();
-            Map<String, String> canNotFindClass = new HashMap<>();
-
+            Map<String, String> errors = new HashMap<>();
             ParsedJar parsedJar = new ParsedJar();
             parsedJar.setJarName(jarName);
-            parsedJar.setCanNotLoadClass(canNotLoadClass);
-            parsedJar.setNoMethodClass(noMethodClass);
-            parsedJar.setCanNotFindClass(canNotFindClass);
+            parsedJar.setErrors(errors);
             // 解析 Dubbo 接口
             for (String name : classes) {
                 try {
                     Class<?> clazz = classLoader.loadClass(name, false);
                     if (null == clazz) {
-                        canNotLoadClass.add(name);
+                        errors.put(name, "Try to load this class but return null.");
                         continue;
                     }
                     // 跳过没有定义任何方法的接口
                     if (clazz.getDeclaredMethods().length == 0) {
-                        noMethodClass.add(name);
+                        errors.put(name, "This class has no methods.");
                         continue;
                     }
                     if (clazz.isInterface()) {
@@ -138,7 +134,7 @@ public class ApiScanner {
                         parsedJar.addParsedInterface(parsedInterface);
                     }
                 } catch (Throwable e) {
-                    canNotFindClass.put(name, e.getMessage());
+                    errors.put(name, e.getClass().getSimpleName() + ":" + e.getMessage());
                     log.error("Can not find class {}", name);
                 }
             }
@@ -153,6 +149,12 @@ public class ApiScanner {
         return parsedResult;
     }
 
+    /**
+     * 解析方法
+     *
+     * @param method 目标方法
+     * @return 结构化的方法
+     */
     private ParsedMethod analyzeMethod(Method method) {
         ParsedMethod parsedMethod = new ParsedMethod();
         parsedMethod.setMethodName(method.getName());
@@ -161,6 +163,12 @@ public class ApiScanner {
         return parsedMethod;
     }
 
+    /**
+     * 解析方法参数
+     *
+     * @param parameterTypes 方法参数类型
+     * @return 结构化的方法参数
+     */
     private List<MethodParam> getMethodParams(Type[] parameterTypes) {
         List<MethodParam> methodParams = new ArrayList<>();
         int argIndex = 0;
@@ -183,6 +191,12 @@ public class ApiScanner {
         return methodParams;
     }
 
+    /**
+     * 解析方法返回值
+     *
+     * @param returnType 方法返回值类型
+     * @return 结构化的方法返回值
+     */
     private MethodReturnType getReturnType(Type returnType) {
         MethodReturnType methodReturnType = new MethodReturnType();
         if (returnType instanceof ParameterizedType) {
@@ -198,13 +212,5 @@ public class ApiScanner {
         }
         return methodReturnType;
     }
-
-//    private String formatName(String binaryName) {
-//        if (simpleMode) {
-//            return binaryName.substring(binaryName.lastIndexOf(".") + 1);
-//        } else {
-//            return binaryName;
-//        }
-//    }
 
 }

@@ -21,13 +21,7 @@ public class ParsedJar implements Serializable {
 
     private List<ParsedInterface> parsedInterfaces = new ArrayList<>();
 
-    private List<String> canNotLoadClass = new ArrayList<>();
-
-    private List<String> noMethodClass = new ArrayList<>();
-
-//    private List<String> canNotFindClass = new ArrayList<>();
-
-    private Map<String, String> canNotFindClass = new HashMap<>();
+    private Map<String, String> errors = new HashMap<>();
 
     public void addParsedInterface(ParsedInterface parsedInterface) {
         parsedInterfaces.add(parsedInterface);

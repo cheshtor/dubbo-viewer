@@ -23,14 +23,14 @@ public class Main {
         filenames.add("common-core.jar");
         filenames.add("feign-core.jar");
 
-        String[] basePackages = {"cn.yzw.iec.auac.facade.sdk"};
+        String[] basePackages = {"cn.yzw.iec.auac.facade"};
 
         File[] files = filenames.stream().map(name -> new File(basePath + name)).collect(Collectors.toList()).toArray(new File[]{});
 
 
         ApiScanner apiScanner = new ApiScanner(files, basePackages);
 
-        ParsedResult parsedResult = apiScanner.scanApi(false);
+        ParsedResult parsedResult = apiScanner.scanApi();
         System.out.println(JSON.toJSON(parsedResult));
 
     }
