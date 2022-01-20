@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -31,10 +32,18 @@ public class ApiScanner {
     private List<JarFile> jarFiles = new ArrayList<>();
 
     /**
+     * 类加载器
+     */
+    private ApiClassLoader classLoader;
+
+    /**
      * 要扫描的包路径，避免扫描范围扩大导致扫描所需依赖增多
      */
     private List<String> packages = new ArrayList<>();
 
+    /**
+     * 扫描过程中的错误。key => 类名，value => 错误信息
+     */
     private Map<String, String> fileTranslateError = new HashMap<>();
 
     public ApiScanner(File[] files, String... basePackages) {
@@ -61,6 +70,7 @@ public class ApiScanner {
             }
         }
         urls = urlList.toArray(new URL[urlList.size()]);
+        classLoader = new ApiClassLoader(urls);
         if (null != basePackages) {
             packages = Arrays.stream(basePackages).map(p -> p.replace(".", "/")).collect(Collectors.toList());
         }
@@ -101,8 +111,6 @@ public class ApiScanner {
         if (jarClasses.isEmpty()) {
             return parsedResult;
         }
-        // 创建类加载器，将要扫描的 jar 包作为其 classpath
-        ApiClassLoader classLoader = new ApiClassLoader(urls);
         // 按 jar 包范围逐一扫描 Dubbo 接口
         jarClasses.forEach((jarName, classes) -> {
             Map<String, String> errors = new HashMap<>();
@@ -175,17 +183,8 @@ public class ApiScanner {
         for (Type type : parameterTypes) {
             MethodParam param = new MethodParam();
             param.setIndex(argIndex++);
-            if (type instanceof ParameterizedType) {
-                ParameterizedType parameterizedType = (ParameterizedType) type;
-                Type rawType = parameterizedType.getRawType();
-                param.setRawType(rawType.getTypeName());
-                Type[] actualTypeArguments = parameterizedType.getActualTypeArguments();
-                for (Type at : actualTypeArguments) {
-                    param.addParameterizedType(at.getTypeName());
-                }
-            } else {
-                param.setRawType(type.getTypeName());
-            }
+            ParamType paramType = parseGenericType(type);
+            param.setParamType(paramType);
             methodParams.add(param);
         }
         return methodParams;
@@ -199,18 +198,45 @@ public class ApiScanner {
      */
     private MethodReturnType getReturnType(Type returnType) {
         MethodReturnType methodReturnType = new MethodReturnType();
-        if (returnType instanceof ParameterizedType) {
-            ParameterizedType parameterizedType = (ParameterizedType) returnType;
+        ParamType paramType = parseGenericType(returnType);
+        methodReturnType.setParamType(paramType);
+        return methodReturnType;
+    }
+
+    private Map<String, ParamType> getProperties(Type type) {
+        Map<String, ParamType> properties = new HashMap<>();
+        String typeName = type.getTypeName();
+        if (typeName.startsWith("java.")) {
+            return properties;
+        }
+        try {
+            Class<?> clazz = classLoader.loadClass(typeName, false);
+            Field[] fields = clazz.getFields();
+            for (Field field : fields) {
+                String fieldName = field.getName();
+                ParamType paramType = parseGenericType(field.getGenericType());
+                properties.put(fieldName, paramType);
+            }
+        } catch (ClassNotFoundException e) {
+            log.error("Parse {} properties failed.", typeName);
+        }
+        return properties;
+    }
+
+    private ParamType parseGenericType(Type type) {
+        ParamType paramType = new ParamType();
+        if (type instanceof ParameterizedType) {
+            ParameterizedType parameterizedType = (ParameterizedType) type;
             Type rawType = parameterizedType.getRawType();
-            methodReturnType.setRawType(rawType.getTypeName());
+            paramType.setRawType(rawType.getTypeName());
             Type[] actualTypeArguments = parameterizedType.getActualTypeArguments();
-            for (Type type : actualTypeArguments) {
-                methodReturnType.addParameterizedType(type.getTypeName());
+            for (Type at : actualTypeArguments) {
+                paramType.addParameterizedType(at.getTypeName());
             }
         } else {
-            methodReturnType.setRawType(returnType.getTypeName());
+            paramType.setRawType(type.getTypeName());
         }
-        return methodReturnType;
+        return paramType;
     }
 
 }

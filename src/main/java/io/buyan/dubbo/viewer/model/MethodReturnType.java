@@ -3,8 +3,6 @@ package io.buyan.dubbo.viewer.model;
 import lombok.Data;
 
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
 
 import static io.buyan.dubbo.viewer.utils.NameUtil.batchSimplify;
 import static io.buyan.dubbo.viewer.utils.NameUtil.simplify;
@@ -18,32 +16,26 @@ import static io.buyan.dubbo.viewer.utils.NameUtil.simplify;
 @Data
 public class MethodReturnType implements Serializable {
 
-    private String rawType;
-
-    private List<String> parameterizedTypes = new ArrayList<>();
+    private ParamType paramType;
 
     private String returnType;
 
     private String simpleReturnTye;
 
     public String getReturnType() {
-        if (parameterizedTypes.isEmpty()) {
-            return rawType;
+        if (paramType.getParameterizedTypes().isEmpty()) {
+            return paramType.getRawType();
         }
-        String generic = String.join(", ", parameterizedTypes);
-        return rawType + "<" + generic + ">";
+        String generic = String.join(", ", paramType.getParameterizedTypes());
+        return paramType.getRawType() + "<" + generic + ">";
     }
 
     public String getSimpleReturnType() {
-        if (parameterizedTypes.isEmpty()) {
-            return simplify(rawType);
+        if (paramType.getParameterizedTypes().isEmpty()) {
+            return simplify(paramType.getRawType());
         }
-        String generic = String.join(", ", batchSimplify(parameterizedTypes));
-        return simplify(rawType) + "<" + generic + ">";
-    }
-
-    public void addParameterizedType(String type) {
-        parameterizedTypes.add(type);
+        String generic = String.join(", ", batchSimplify(paramType.getParameterizedTypes()));
+        return simplify(paramType.getRawType()) + "<" + generic + ">";
     }
 
 }

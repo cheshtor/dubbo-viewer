@@ -23,7 +23,7 @@ public class Main {
         filenames.add("common-core.jar");
         filenames.add("feign-core.jar");
 
-        String[] basePackages = {"cn.yzw.iec.auac.facade"};
+        String[] basePackages = {"cn.yzw.iec.auac.facade.sdk"};
 
         File[] files = filenames.stream().map(name -> new File(basePath + name)).collect(Collectors.toList()).toArray(new File[]{});
 
