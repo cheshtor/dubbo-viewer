@@ -1,11 +1,10 @@
 package io.buyan.dubbo.viewer;
 
-import io.buyan.dubbo.viewer.model.*;
+import io.buyan.dubbo.viewer.structure.*;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -42,7 +41,7 @@ public class ApiScanner {
     private List<String> packages = new ArrayList<>();
 
     /**
-     * 扫描过程中的错误。key => 类名，value => 错误信息
+     * 扫描过程中的错误。key => 文件名，value => 错误信息
      */
     private Map<String, String> fileTranslateError = new HashMap<>();
 
@@ -89,8 +88,10 @@ public class ApiScanner {
      *
      * @return 结构化的 Dubbo 接口定义
      */
-    public ParsedResult scanApi() {
-        ParsedResult parsedResult = new ParsedResult();
+    public Result scanApi() {
+        Result result = new Result();
+        List<JarStructure> jarStructures = new ArrayList<>();
+        result.setJars(jarStructures);
         // 查找要解析的 Dubbo 接口
         Map<String, List<String>> jarClasses = new HashMap<>();
         for (JarFile jarFile : jarFiles) {
@@ -109,14 +110,16 @@ public class ApiScanner {
             }
         }
         if (jarClasses.isEmpty()) {
-            return parsedResult;
+            return result;
         }
         // 按 jar 包范围逐一扫描 Dubbo 接口
         jarClasses.forEach((jarName, classes) -> {
             Map<String, String> errors = new HashMap<>();
-            ParsedJar parsedJar = new ParsedJar();
-            parsedJar.setJarName(jarName);
-            parsedJar.setErrors(errors);
+            JarStructure jarStructure = new JarStructure();
+            jarStructure.setJarName(jarName);
+            jarStructure.setErrors(errors);
+            List<InterfaceStructure> interfaces = new ArrayList<>();
+            jarStructure.setInterfaces(interfaces);
             // 解析 Dubbo 接口
             for (String name : classes) {
                 try {
@@ -131,22 +134,24 @@ public class ApiScanner {
                         continue;
                     }
                     if (clazz.isInterface()) {
-                        ParsedInterface parsedInterface = new ParsedInterface();
-                        parsedInterface.setClassName(clazz.getName());
+                        InterfaceStructure interfaceStructure = new InterfaceStructure();
+                        interfaceStructure.setClassname(clazz.getName());
+                        List<MethodStructure> methodStructures = new ArrayList<>();
+                        interfaceStructure.setMethods(methodStructures);
                         // 解析接口内的方法
                         Method[] declaredMethods = clazz.getDeclaredMethods();
                         for (Method method : declaredMethods) {
-                            ParsedMethod parsedMethod = analyzeMethod(method);
-                            parsedInterface.addParsedMethod(parsedMethod);
+                            MethodStructure methodStructure = analyzeMethod(method);
+                            methodStructures.add(methodStructure);
                         }
-                        parsedJar.addParsedInterface(parsedInterface);
+                        interfaces.add(interfaceStructure);
                     }
                 } catch (Throwable e) {
                     errors.put(name, e.getClass().getSimpleName() + ":" + e.getMessage());
                     log.error("Can not find class {}", name);
                 }
             }
-            parsedResult.addParsedJar(parsedJar);
+            jarStructures.add(jarStructure);
         });
         // 接口解析完成后卸载类加载器及其所加载的类
         try {
@@ -154,7 +159,7 @@ public class ApiScanner {
         } catch (IOException e) {
             log.error("Close ClassLoader failed.", e);
         }
-        return parsedResult;
+        return result;
     }
 
     /**
@@ -163,12 +168,12 @@ public class ApiScanner {
      * @param method 目标方法
      * @return 结构化的方法
      */
-    private ParsedMethod analyzeMethod(Method method) {
-        ParsedMethod parsedMethod = new ParsedMethod();
-        parsedMethod.setMethodName(method.getName());
-        parsedMethod.setReturnType(getReturnType(method.getGenericReturnType()));
-        parsedMethod.setMethodParams(getMethodParams(method.getParameterTypes()));
-        return parsedMethod;
+    private MethodStructure analyzeMethod(Method method) {
+        MethodStructure methodStructure = new MethodStructure();
+        methodStructure.setMethodName(method.getName());
+        methodStructure.setReturnType(getReturnType(method.getGenericReturnType()));
+        methodStructure.setParams(getMethodParams(method.getGenericParameterTypes()));
+        return methodStructure;
     }
 
     /**
@@ -177,17 +182,20 @@ public class ApiScanner {
      * @param parameterTypes 方法参数类型
      * @return 结构化的方法参数
      */
-    private List<MethodParam> getMethodParams(Type[] parameterTypes) {
-        List<MethodParam> methodParams = new ArrayList<>();
+    private List<MethodParamStructure> getMethodParams(Type[] parameterTypes) {
+        List<MethodParamStructure> params = new ArrayList<>();
         int argIndex = 0;
-        for (Type type : parameterTypes) {
-            MethodParam param = new MethodParam();
-            param.setIndex(argIndex++);
-            ParamType paramType = parseGenericType(type);
-            param.setParamType(paramType);
-            methodParams.add(param);
+        for (Type parameterType : parameterTypes) {
+            MethodParamStructure methodParamStructure = new MethodParamStructure();
+            TypeStructure typeStructure = new TypeStructure();
+            typeStructure.setRawType(parameterType);
+            typeStructure.setTypeName(parameterType.getTypeName());
+            typeStructure = getTypeStructure(typeStructure);
+            methodParamStructure.setName("arg" + (argIndex++));
+            methodParamStructure.setTypeStructure(typeStructure);
+            params.add(methodParamStructure);
         }
-        return methodParams;
+        return params;
     }
 
     /**
@@ -196,47 +204,42 @@ public class ApiScanner {
      * @param returnType 方法返回值类型
      * @return 结构化的方法返回值
      */
-    private MethodReturnType getReturnType(Type returnType) {
-        MethodReturnType methodReturnType = new MethodReturnType();
-        ParamType paramType = parseGenericType(returnType);
-        methodReturnType.setParamType(paramType);
-        return methodReturnType;
+    private TypeStructure getReturnType(Type returnType) {
+        TypeStructure typeStructure = new TypeStructure();
+        typeStructure.setRawType(returnType);
+        typeStructure.setTypeName(returnType.getTypeName());
+        typeStructure = getTypeStructure(typeStructure);
+        return typeStructure;
     }
 
-    private Map<String, ParamType> getProperties(Type type) {
-        Map<String, ParamType> properties = new HashMap<>();
-        String typeName = type.getTypeName();
-        if (typeName.startsWith("java.")) {
-            return properties;
+    private TypeStructure getTypeStructure(TypeStructure structure) {
+        if (null == structure) {
+            return null;
         }
-        try {
-            Class<?> clazz = classLoader.loadClass(typeName, false);
-            Field[] fields = clazz.getFields();
-            for (Field field : fields) {
-                String fieldName = field.getName();
-                ParamType paramType = parseGenericType(field.getGenericType());
-                properties.put(fieldName, paramType);
-            }
-        } catch (ClassNotFoundException e) {
-            log.error("Parse {} properties failed.", typeName);
-        }
-        return properties;
-    }
-
-    private ParamType parseGenericType(Type type) {
-        ParamType paramType = new ParamType();
-        if (type instanceof ParameterizedType) {
-            ParameterizedType parameterizedType = (ParameterizedType) type;
-            Type rawType = parameterizedType.getRawType();
-            paramType.setRawType(rawType.getTypeName());
-            Type[] actualTypeArguments = parameterizedType.getActualTypeArguments();
-            for (Type at : actualTypeArguments) {
-                paramType.addParameterizedType(at.getTypeName());
+        List<TypeStructure> subTypes = structure.getGenericTypes();
+        if (null == subTypes || subTypes.isEmpty()) {
+            subTypes = new ArrayList<>();
+            structure.setGenericTypes(subTypes);
+            Type type = structure.getRawType();
+            if (type instanceof ParameterizedType) {
+                ParameterizedType parameterizedType = (ParameterizedType) type;
+                structure.setRawType(parameterizedType.getRawType());
+                structure.setTypeName(parameterizedType.getRawType().getTypeName());
+                Type[] actualTypeArguments = parameterizedType.getActualTypeArguments();
+                for (Type actualTypeArgument : actualTypeArguments) {
+                    TypeStructure s = new TypeStructure();
+                    s.setRawType(actualTypeArgument);
+                    s.setTypeName(actualTypeArgument.getTypeName());
+                    subTypes.add(s);
+                }
+                getTypeStructure(structure);
             }
         } else {
-            paramType.setRawType(type.getTypeName());
+            for (TypeStructure subType : subTypes) {
+                getTypeStructure(subType);
+            }
         }
-        return paramType;
+        return structure;
     }
 
 }
