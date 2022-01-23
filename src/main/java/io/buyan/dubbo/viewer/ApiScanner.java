@@ -5,8 +5,8 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -14,6 +14,8 @@ import java.util.*;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Collectors;
+
+import static io.buyan.dubbo.viewer.StructureResolver.readBean;
 
 /**
  * Dubbo 接口扫描器
@@ -69,7 +71,6 @@ public class ApiScanner {
             }
         }
         urls = urlList.toArray(new URL[urlList.size()]);
-        classLoader = new ApiClassLoader(urls);
         if (null != basePackages) {
             packages = Arrays.stream(basePackages).map(p -> p.replace(".", "/")).collect(Collectors.toList());
         }
@@ -89,6 +90,11 @@ public class ApiScanner {
      * @return 结构化的 Dubbo 接口定义
      */
     public Result scanApi() {
+        // 每次扫描都必须新建 ApiScanner 实例以确保内存及时回收
+        if (classLoader != null) {
+            throw new RuntimeException("ApiScanner instance can not be reused.");
+        }
+        classLoader = new ApiClassLoader(urls);
         Result result = new Result();
         List<JarStructure> jarStructures = new ArrayList<>();
         result.setJars(jarStructures);
@@ -153,6 +159,40 @@ public class ApiScanner {
             }
             jarStructures.add(jarStructure);
         });
+        List<String> beanNames = new ArrayList<>();
+        for (JarStructure jarStructure : jarStructures) {
+            List<InterfaceStructure> interfaces = jarStructure.getInterfaces();
+            for (InterfaceStructure itf : interfaces) {
+                List<MethodStructure> methods = itf.getMethods();
+                for (MethodStructure method : methods) {
+                    // 只解析方法参数，不解析返回值。因为发起请求时用户只需要填入请求参数，而不需要关心返回值的类型
+                    List<MethodParamStructure> params = method.getParams();
+                    for (MethodParamStructure param : params) {
+                        TypeStructure typeStructure = param.getTypeStructure();
+                        readBean(typeStructure, beanNames);
+                    }
+                }
+            }
+        }
+        if (!beanNames.isEmpty()) {
+            Map<String, Map<String, String>> beanProperty = new HashMap<>();
+            for (String beanName : beanNames) {
+                try {
+                    Class<?> clazz = classLoader.loadClass(beanName, false);
+                    Field[] fields = clazz.getDeclaredFields();
+                    Map<String, String> nameTypeMapping = new HashMap<>();
+                    for (Field field : fields) {
+                        String fieldName = field.getName();
+                        String typeName = field.getGenericType().getTypeName();
+                        nameTypeMapping.putIfAbsent(fieldName, typeName);
+                    }
+                    beanProperty.put(beanName, nameTypeMapping);
+                } catch (ClassNotFoundException e) {
+                    e.printStackTrace();
+                }
+            }
+            result.setBeanProperty(beanProperty);
+        }
         // 接口解析完成后卸载类加载器及其所加载的类
         try {
             classLoader.close();
@@ -190,7 +230,7 @@ public class ApiScanner {
             TypeStructure typeStructure = new TypeStructure();
             typeStructure.setRawType(parameterType);
             typeStructure.setTypeName(parameterType.getTypeName());
-            typeStructure = getTypeStructure(typeStructure);
+            typeStructure = StructureResolver.buildTypeStructure(typeStructure);
             methodParamStructure.setName("arg" + (argIndex++));
             methodParamStructure.setTypeStructure(typeStructure);
             params.add(methodParamStructure);
@@ -208,38 +248,8 @@ public class ApiScanner {
         TypeStructure typeStructure = new TypeStructure();
         typeStructure.setRawType(returnType);
         typeStructure.setTypeName(returnType.getTypeName());
-        typeStructure = getTypeStructure(typeStructure);
+        typeStructure = StructureResolver.buildTypeStructure(typeStructure);
         return typeStructure;
-    }
-
-    private TypeStructure getTypeStructure(TypeStructure structure) {
-        if (null == structure) {
-            return null;
-        }
-        List<TypeStructure> subTypes = structure.getGenericTypes();
-        if (null == subTypes || subTypes.isEmpty()) {
-            subTypes = new ArrayList<>();
-            structure.setGenericTypes(subTypes);
-            Type type = structure.getRawType();
-            if (type instanceof ParameterizedType) {
-                ParameterizedType parameterizedType = (ParameterizedType) type;
-                structure.setRawType(parameterizedType.getRawType());
-                structure.setTypeName(parameterizedType.getRawType().getTypeName());
-                Type[] actualTypeArguments = parameterizedType.getActualTypeArguments();
-                for (Type actualTypeArgument : actualTypeArguments) {
-                    TypeStructure s = new TypeStructure();
-                    s.setRawType(actualTypeArgument);
-                    s.setTypeName(actualTypeArgument.getTypeName());
-                    subTypes.add(s);
-                }
-                getTypeStructure(structure);
-            }
-        } else {
-            for (TypeStructure subType : subTypes) {
-                getTypeStructure(subType);
-            }
-        }
-        return structure;
     }
 
 }

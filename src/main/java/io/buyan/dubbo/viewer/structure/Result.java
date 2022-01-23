@@ -20,4 +20,6 @@ public class Result implements Serializable {
 
     private Map<String, String> fileTranslateError = new HashMap<>();
 
+    private Map<String, Map<String, String>> beanProperty = new HashMap<>();
+
 }

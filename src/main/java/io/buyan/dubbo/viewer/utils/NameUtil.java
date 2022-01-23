@@ -1,9 +1,5 @@
 package io.buyan.dubbo.viewer.utils;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.stream.Collectors;
-
 /**
  * 名称工具
  *
@@ -19,10 +15,6 @@ public class NameUtil {
      */
     public static String simplify(String binaryName) {
         return binaryName.substring(binaryName.lastIndexOf(".") + 1);
-    }
-
-    public static List<String> batchSimplify(List<String> binaryNames) {
-        return binaryNames.stream().map(NameUtil::simplify).collect(Collectors.toList());
     }
 
 }

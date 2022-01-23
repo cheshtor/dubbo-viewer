@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
  */
 public class Main {
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         String basePath = "lib/";
         List<String> filenames = new ArrayList<>();
         filenames.add("facade-sdk.jar");
@@ -27,11 +27,11 @@ public class Main {
 
         File[] files = filenames.stream().map(name -> new File(basePath + name)).collect(Collectors.toList()).toArray(new File[]{});
 
-
         ApiScanner apiScanner = new ApiScanner(files, basePackages);
 
         Result result = apiScanner.scanApi();
         System.out.println(JSON.toJSONString(result));
+
 
     }
 
