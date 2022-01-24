@@ -41,7 +41,7 @@ public class ApiScanner {
     /**
      * 要扫描的包路径，避免扫描范围扩大导致扫描所需依赖增多
      */
-    private List<String> packages = new ArrayList<>();
+    private List<String> packages;
 
     /**
      * 扫描过程中的错误。key => 文件名，value => 错误信息
@@ -50,8 +50,12 @@ public class ApiScanner {
 
     public ApiScanner(File[] files, String... basePackages) {
         if (null == files) {
-            return;
+            throw new ApiScanException("There are no files to scan.");
         }
+        if (null == basePackages || basePackages.length == 0) {
+            throw new ApiScanException("basePackages can not be null.");
+        }
+        // File 转换为 URL 和 JarFile
         List<URL> urlList = new ArrayList<>();
         for (File file : files) {
             // File 转为 URL
@@ -72,11 +76,14 @@ public class ApiScanner {
             }
         }
         urls = urlList.toArray(new URL[urlList.size()]);
-        if (null != basePackages) {
-            packages = Arrays.stream(basePackages).map(p -> p.replace(".", "/")).collect(Collectors.toList());
-        }
+        packages = Arrays.stream(basePackages).map(p -> p.replace(".", "/")).collect(Collectors.toList());
     }
 
+    /**
+     * 判断指定的类是否在要扫描的包范围内
+     * @param name 类型名称
+     * @return true 可被扫描 false 不可扫描
+     */
     private boolean isClassInBasePackages(String name) {
         if (packages.isEmpty()) {
             return true;
@@ -88,15 +95,17 @@ public class ApiScanner {
     /**
      * 对所有的 jar 包进行扫描，分析出所有的接口及其方法
      *
-     * @return 结构化的 Dubbo 接口定义
+     * @return Result 结构化的 Dubbo 接口定义
      */
     public Result scanApi() {
         // 每次扫描都必须新建 ApiScanner 实例以确保内存及时回收
         if (classLoader != null) {
-            throw new RuntimeException("ApiScanner instance can not be reused.");
+            throw new ApiScanException("ApiScanner instance can not be reused.");
         }
+        // 创建类加载器，urls 为 classpath
         classLoader = new ApiClassLoader(urls);
         Result result = new Result();
+        // Jar 包抽象结构集合
         List<JarStructure> jarStructures = new ArrayList<>();
         result.setJars(jarStructures);
         // 查找要解析的 Dubbo 接口
@@ -106,10 +115,12 @@ public class ApiScanner {
             String jarName = jarFile.getName();
             jarName = jarName.substring(jarName.lastIndexOf("/") + 1);
             jarClasses.put(jarName, binaryNames);
+            // 迭代 Jar 包内的文件
             Enumeration<JarEntry> entries = jarFile.entries();
             while (entries.hasMoreElements()) {
                 JarEntry jarEntry = entries.nextElement();
                 String name = jarEntry.getName();
+                // 筛选在扫描范围内的 .class 文件
                 if (name.endsWith(".class") && isClassInBasePackages(name)) {
                     String binaryName = name.substring(0, name.lastIndexOf(".")).replace("/", ".");
                     binaryNames.add(binaryName);
@@ -121,17 +132,22 @@ public class ApiScanner {
         }
         // 缓存 MethodStructure 用于之后的入参类型分析
         List<MethodStructure> cachedMethodStructures = new ArrayList<>();
-        // 按 jar 包范围逐一扫描 Dubbo 接口
+        // 按 Jar 包范围逐一扫描 Dubbo 接口
         jarClasses.forEach((jarName, classes) -> {
+            // Jar 包扫描错误
             Map<String, String> errors = new HashMap<>();
+            // Jar 包抽象
             JarStructure jarStructure = new JarStructure();
+            // Jar 包名称
             jarStructure.setJarName(jarName);
             jarStructure.setErrors(errors);
+            // Jar 包内的所有接口抽象
             List<InterfaceStructure> interfaces = new ArrayList<>();
             jarStructure.setInterfaces(interfaces);
             // 解析 Dubbo 接口
             for (String name : classes) {
                 try {
+                    // 加载但不链接类，因为只需要分析类结构
                     Class<?> clazz = classLoader.loadClass(name, false);
                     if (null == clazz) {
                         errors.put(name, "Try to load this class but return null.");
@@ -142,9 +158,13 @@ public class ApiScanner {
                         errors.put(name, "This class has no methods.");
                         continue;
                     }
+                    // 只处理接口
                     if (clazz.isInterface()) {
+                        // 接口抽象
                         InterfaceStructure interfaceStructure = new InterfaceStructure();
+                        // 设置接口类名
                         interfaceStructure.setClassname(clazz.getName());
+                        // 接口下的所有方法抽象
                         List<MethodStructure> methodStructures = new ArrayList<>();
                         interfaceStructure.setMethods(methodStructures);
                         // 解析接口内的方法
@@ -163,6 +183,7 @@ public class ApiScanner {
             }
             jarStructures.add(jarStructure);
         });
+        // 将所有方法的入参的 Field 进行解析，拿到涉及到的所有自定义类型的字段定义
         Map<String, Map<String, String>> properties = loadCustomType(cachedMethodStructures);
         result.setBeanProperty(properties);
         // 接口解析完成后卸载类加载器及其所加载的类
@@ -228,6 +249,9 @@ public class ApiScanner {
                     Type fieldType = field.getGenericType();
                     String typeName = fieldType.getTypeName();
                     if (TypeUtil.isPrimitive(typeName)) {
+                        continue;
+                    }
+                    if (clazz.isEnum()) {
                         continue;
                     }
                     TypeStructure fieldTypeStructure = getBuiltTypeStructure(fieldType);
