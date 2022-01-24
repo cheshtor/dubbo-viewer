@@ -1,6 +1,7 @@
 package io.buyan.dubbo.viewer;
 
 import io.buyan.dubbo.viewer.structure.*;
+import io.buyan.dubbo.viewer.utils.TypeUtil;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
@@ -15,7 +16,7 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Collectors;
 
-import static io.buyan.dubbo.viewer.StructureResolver.readBean;
+import static io.buyan.dubbo.viewer.StructureResolver.findCustomType;
 
 /**
  * Dubbo 接口扫描器
@@ -118,6 +119,8 @@ public class ApiScanner {
         if (jarClasses.isEmpty()) {
             return result;
         }
+        // 缓存 MethodStructure 用于之后的入参类型分析
+        List<MethodStructure> cachedMethodStructures = new ArrayList<>();
         // 按 jar 包范围逐一扫描 Dubbo 接口
         jarClasses.forEach((jarName, classes) -> {
             Map<String, String> errors = new HashMap<>();
@@ -149,6 +152,7 @@ public class ApiScanner {
                         for (Method method : declaredMethods) {
                             MethodStructure methodStructure = analyzeMethod(method);
                             methodStructures.add(methodStructure);
+                            cachedMethodStructures.add(methodStructure);
                         }
                         interfaces.add(interfaceStructure);
                     }
@@ -159,40 +163,8 @@ public class ApiScanner {
             }
             jarStructures.add(jarStructure);
         });
-        List<String> beanNames = new ArrayList<>();
-        for (JarStructure jarStructure : jarStructures) {
-            List<InterfaceStructure> interfaces = jarStructure.getInterfaces();
-            for (InterfaceStructure itf : interfaces) {
-                List<MethodStructure> methods = itf.getMethods();
-                for (MethodStructure method : methods) {
-                    // 只解析方法参数，不解析返回值。因为发起请求时用户只需要填入请求参数，而不需要关心返回值的类型
-                    List<MethodParamStructure> params = method.getParams();
-                    for (MethodParamStructure param : params) {
-                        TypeStructure typeStructure = param.getTypeStructure();
-                        readBean(typeStructure, beanNames);
-                    }
-                }
-            }
-        }
-        if (!beanNames.isEmpty()) {
-            Map<String, Map<String, String>> beanProperty = new HashMap<>();
-            for (String beanName : beanNames) {
-                try {
-                    Class<?> clazz = classLoader.loadClass(beanName, false);
-                    Field[] fields = clazz.getDeclaredFields();
-                    Map<String, String> nameTypeMapping = new HashMap<>();
-                    for (Field field : fields) {
-                        String fieldName = field.getName();
-                        String typeName = field.getGenericType().getTypeName();
-                        nameTypeMapping.putIfAbsent(fieldName, typeName);
-                    }
-                    beanProperty.put(beanName, nameTypeMapping);
-                } catch (ClassNotFoundException e) {
-                    e.printStackTrace();
-                }
-            }
-            result.setBeanProperty(beanProperty);
-        }
+        Map<String, Map<String, String>> properties = loadCustomType(cachedMethodStructures);
+        result.setBeanProperty(properties);
         // 接口解析完成后卸载类加载器及其所加载的类
         try {
             classLoader.close();
@@ -200,6 +172,73 @@ public class ApiScanner {
             log.error("Close ClassLoader failed.", e);
         }
         return result;
+    }
+
+    private Map<String, Map<String, String>> loadCustomType(List<MethodStructure> methodStructures) {
+        Set<String> typeNames = analyzeMethodParamCustomType(methodStructures);
+        Map<String, Map<String, String>> properties = new HashMap<>();
+        for (String typeName : typeNames) {
+            try {
+                Class<?> clazz = classLoader.loadClass(typeName);
+                Field[] fields = clazz.getDeclaredFields();
+                Map<String, String> property = new HashMap<>();
+                for (Field field : fields) {
+                    property.put(field.getName(), field.getGenericType().getTypeName());
+                }
+                properties.put(typeName, property);
+            } catch (ClassNotFoundException e) {
+                e.printStackTrace();
+            }
+        }
+        return properties;
+    }
+
+
+    /**
+     * 解析所有被扫描的接口方法的入参、以及入参的 Field 中使用到的自定义类型
+     * @param methodStructures 方法结构
+     * @return 自定义类型
+     */
+    private Set<String> analyzeMethodParamCustomType(List<MethodStructure> methodStructures) {
+        Set<String> typeNames = new HashSet<>();
+        for (MethodStructure methodStructure : methodStructures) {
+            List<MethodParamStructure> params = methodStructure.getParams();
+            for (MethodParamStructure param : params) {
+                Set<String> names = new HashSet<>();
+                findFieldCustomType(param.getTypeStructure(), names);
+                typeNames.addAll(names);
+            }
+        }
+        return typeNames;
+    }
+
+    /**
+     * 解析 TypeStructure 表示的类型的所有 Field，并找出这些 Field 使用的自定义类型
+     * @param typeStructure TypeStructure
+     * @param names 找到的所有自定义类型全类名
+     */
+    private void findFieldCustomType(TypeStructure typeStructure, Set<String> names) {
+        Set<String> customType = findCustomType(typeStructure);
+        names.addAll(customType);
+        for (String name : customType) {
+            try {
+                Class<?> clazz = classLoader.loadClass(name, false);
+                Field[] fields = clazz.getDeclaredFields();
+                for (Field field : fields) {
+                    Type fieldType = field.getGenericType();
+                    String typeName = fieldType.getTypeName();
+                    if (TypeUtil.isPrimitive(typeName)) {
+                        continue;
+                    }
+                    TypeStructure fieldTypeStructure = getBuiltTypeStructure(fieldType);
+                    if (!fieldTypeStructure.getGenericTypes().isEmpty()) {
+                        findFieldCustomType(fieldTypeStructure, names);
+                    }
+                }
+            } catch (ClassNotFoundException e) {
+                e.printStackTrace();
+            }
+        }
     }
 
     /**
@@ -227,10 +266,7 @@ public class ApiScanner {
         int argIndex = 0;
         for (Type parameterType : parameterTypes) {
             MethodParamStructure methodParamStructure = new MethodParamStructure();
-            TypeStructure typeStructure = new TypeStructure();
-            typeStructure.setRawType(parameterType);
-            typeStructure.setTypeName(parameterType.getTypeName());
-            typeStructure = StructureResolver.buildTypeStructure(typeStructure);
+            TypeStructure typeStructure = getBuiltTypeStructure(parameterType);
             methodParamStructure.setName("arg" + (argIndex++));
             methodParamStructure.setTypeStructure(typeStructure);
             params.add(methodParamStructure);
@@ -245,11 +281,19 @@ public class ApiScanner {
      * @return 结构化的方法返回值
      */
     private TypeStructure getReturnType(Type returnType) {
+        return getBuiltTypeStructure(returnType);
+    }
+
+    /**
+     * 将指定类型解析为 TypeStructure
+     * @param type 要解析的类型
+     * @return TypeStructure
+     */
+    private TypeStructure getBuiltTypeStructure(Type type) {
         TypeStructure typeStructure = new TypeStructure();
-        typeStructure.setRawType(returnType);
-        typeStructure.setTypeName(returnType.getTypeName());
-        typeStructure = StructureResolver.buildTypeStructure(typeStructure);
-        return typeStructure;
+        typeStructure.setRawType(type);
+        typeStructure.setTypeName(type.getTypeName());
+        return StructureResolver.buildTypeStructure(typeStructure);
     }
 
 }

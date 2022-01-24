@@ -1,12 +1,12 @@
 package io.buyan.dubbo.viewer;
 
 import io.buyan.dubbo.viewer.structure.TypeStructure;
+import io.buyan.dubbo.viewer.utils.TypeUtil;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 
 import static io.buyan.dubbo.viewer.utils.NameUtil.simplify;
 
@@ -91,7 +91,8 @@ public class StructureResolver {
         return sb.toString();
     }
 
-    public static void readBean(TypeStructure typeStructure, List<String> beanNames) {
+    public static Set<String> findCustomType(TypeStructure typeStructure) {
+        Set<String> names = new HashSet<>();
         LinkedList<String> queue = new LinkedList<>();
         recursion(typeStructure, queue);
         while (!queue.isEmpty()) {
@@ -102,10 +103,11 @@ public class StructureResolver {
             if (item.contains(", ")) {
                 item = item.substring(0, item.indexOf(","));
             }
-            if (!item.startsWith("java.")) {
-                beanNames.add(item);
+            if (!item.startsWith("java.") && !TypeUtil.isPrimitive(item)) {
+                names.add(item);
             }
         }
+        return names;
     }
 
     /**
