@@ -2,7 +2,8 @@ package io.buyan.dubbo.viewer;
 
 import io.buyan.dubbo.viewer.structure.*;
 import io.buyan.dubbo.viewer.utils.TypeUtil;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
@@ -19,13 +20,14 @@ import java.util.stream.Collectors;
 import static io.buyan.dubbo.viewer.StructureResolver.findCustomType;
 
 /**
- * Dubbo 接口扫描器
+ * Dubbo API 扫描器
  *
  * @author Pengyu Gan
  * CreateDate 2022/1/17
  */
-@Slf4j
 public class ApiScanner {
+
+    private static Logger log = LoggerFactory.getLogger(ApiScanner.class);
 
     /**
      * 要扫描的 jar 包
@@ -46,7 +48,7 @@ public class ApiScanner {
     /**
      * 扫描过程中的错误。key => 文件名，value => 错误信息
      */
-    private Map<String, String> fileTranslateError = new HashMap<>();
+    private Map<String, String> globalError = new HashMap<>();
 
     public ApiScanner(File[] files, String... basePackages) {
         if (null == files) {
@@ -63,7 +65,7 @@ public class ApiScanner {
                 URL url = file.toURI().toURL();
                 urlList.add(url);
             } catch (MalformedURLException e) {
-                fileTranslateError.put(file.getAbsolutePath(), e.getMessage());
+                globalError.put(file.getAbsolutePath(), e.getMessage());
                 log.error("Translate File {} to URL failed.", file.getAbsolutePath());
             }
             // File 转为 JarFile
@@ -71,7 +73,7 @@ public class ApiScanner {
                 JarFile jarFile = new JarFile(file);
                 jarFiles.add(jarFile);
             } catch (IOException e) {
-                fileTranslateError.put(file.getAbsolutePath(), e.getMessage());
+                globalError.put(file.getAbsolutePath(), e.getMessage());
                 log.error("Translate File {} to JarFile failed.", file.getAbsolutePath());
             }
         }
@@ -86,7 +88,7 @@ public class ApiScanner {
      */
     private boolean isClassInBasePackages(String name) {
         if (packages.isEmpty()) {
-            return true;
+            return false;
         }
         Optional<String> exists = packages.stream().filter(name::startsWith).findAny();
         return exists.isPresent();
@@ -104,7 +106,9 @@ public class ApiScanner {
         }
         // 创建类加载器，urls 为 classpath
         classLoader = new ApiClassLoader(urls);
+        // 扫描结果
         Result result = new Result();
+        result.setGlobalError(globalError);
         // Jar 包抽象结构集合
         List<JarStructure> jarStructures = new ArrayList<>();
         result.setJars(jarStructures);
@@ -184,7 +188,7 @@ public class ApiScanner {
             jarStructures.add(jarStructure);
         });
         // 将所有方法的入参的 Field 进行解析，拿到涉及到的所有自定义类型的字段定义
-        Map<String, Map<String, String>> properties = loadCustomType(cachedMethodStructures);
+        Map<String, Map<String, String>> properties = getCustomTypeProperties(cachedMethodStructures);
         result.setBeanProperty(properties);
         // 接口解析完成后卸载类加载器及其所加载的类
         try {
@@ -195,8 +199,13 @@ public class ApiScanner {
         return result;
     }
 
-    private Map<String, Map<String, String>> loadCustomType(List<MethodStructure> methodStructures) {
-        Set<String> typeNames = analyzeMethodParamCustomType(methodStructures);
+    /**
+     * 获取所有方法入参类型的 Field 中涉及到的自定义类型的字段定义
+     * @param methodStructures 方法结构列表
+     * @return 类型与类型定义字段的映射
+     */
+    private Map<String, Map<String, String>> getCustomTypeProperties(List<MethodStructure> methodStructures) {
+        Set<String> typeNames = findCustomTypeInMethodParam(methodStructures);
         Map<String, Map<String, String>> properties = new HashMap<>();
         for (String typeName : typeNames) {
             try {
@@ -208,25 +217,25 @@ public class ApiScanner {
                 }
                 properties.put(typeName, property);
             } catch (ClassNotFoundException e) {
-                e.printStackTrace();
+                globalError.put(typeName, e.getClass().getSimpleName() + ":" + e.getMessage());
+                log.error("Can not find class {}", typeName);
             }
         }
         return properties;
     }
-
 
     /**
      * 解析所有被扫描的接口方法的入参、以及入参的 Field 中使用到的自定义类型
      * @param methodStructures 方法结构
      * @return 自定义类型
      */
-    private Set<String> analyzeMethodParamCustomType(List<MethodStructure> methodStructures) {
+    private Set<String> findCustomTypeInMethodParam(List<MethodStructure> methodStructures) {
         Set<String> typeNames = new HashSet<>();
         for (MethodStructure methodStructure : methodStructures) {
             List<MethodParamStructure> params = methodStructure.getParams();
             for (MethodParamStructure param : params) {
                 Set<String> names = new HashSet<>();
-                findFieldCustomType(param.getTypeStructure(), names);
+                findCustomTypeInField(param.getTypeStructure(), names);
                 typeNames.addAll(names);
             }
         }
@@ -238,7 +247,7 @@ public class ApiScanner {
      * @param typeStructure TypeStructure
      * @param names 找到的所有自定义类型全类名
      */
-    private void findFieldCustomType(TypeStructure typeStructure, Set<String> names) {
+    private void findCustomTypeInField(TypeStructure typeStructure, Set<String> names) {
         Set<String> customType = findCustomType(typeStructure);
         names.addAll(customType);
         for (String name : customType) {
@@ -254,13 +263,14 @@ public class ApiScanner {
                     if (clazz.isEnum()) {
                         continue;
                     }
-                    TypeStructure fieldTypeStructure = getBuiltTypeStructure(fieldType);
+                    TypeStructure fieldTypeStructure = getTypeStructureChain(fieldType);
                     if (!fieldTypeStructure.getGenericTypes().isEmpty()) {
-                        findFieldCustomType(fieldTypeStructure, names);
+                        findCustomTypeInField(fieldTypeStructure, names);
                     }
                 }
             } catch (ClassNotFoundException e) {
-                e.printStackTrace();
+                globalError.put(name, e.getClass().getSimpleName() + ":" + e.getMessage());
+                log.error("Can not find class {}", name);
             }
         }
     }
@@ -290,7 +300,7 @@ public class ApiScanner {
         int argIndex = 0;
         for (Type parameterType : parameterTypes) {
             MethodParamStructure methodParamStructure = new MethodParamStructure();
-            TypeStructure typeStructure = getBuiltTypeStructure(parameterType);
+            TypeStructure typeStructure = getTypeStructureChain(parameterType);
             methodParamStructure.setName("arg" + (argIndex++));
             methodParamStructure.setTypeStructure(typeStructure);
             params.add(methodParamStructure);
@@ -305,7 +315,7 @@ public class ApiScanner {
      * @return 结构化的方法返回值
      */
     private TypeStructure getReturnType(Type returnType) {
-        return getBuiltTypeStructure(returnType);
+        return getTypeStructureChain(returnType);
     }
 
     /**
@@ -313,11 +323,11 @@ public class ApiScanner {
      * @param type 要解析的类型
      * @return TypeStructure
      */
-    private TypeStructure getBuiltTypeStructure(Type type) {
+    private TypeStructure getTypeStructureChain(Type type) {
         TypeStructure typeStructure = new TypeStructure();
         typeStructure.setRawType(type);
         typeStructure.setTypeName(type.getTypeName());
-        return StructureResolver.buildTypeStructure(typeStructure);
+        return StructureResolver.buildTypeStructureChain(typeStructure);
     }
 
 }

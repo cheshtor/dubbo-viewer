@@ -3,7 +3,6 @@ package io.buyan.dubbo.viewer;
 import io.buyan.dubbo.viewer.structure.TypeStructure;
 import io.buyan.dubbo.viewer.utils.TypeUtil;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.*;
@@ -11,7 +10,7 @@ import java.util.*;
 import static io.buyan.dubbo.viewer.utils.NameUtil.simplify;
 
 /**
- *
+ *  {@link TypeStructure} 分析工具
  *
  * @author Pengyu Gan
  * CreateDate 2022/1/21
@@ -29,7 +28,7 @@ public class StructureResolver {
      * @param structure 类型声明的最外层结构
      * @return 类型声明结构链
      */
-    public static TypeStructure buildTypeStructure(TypeStructure structure) {
+    public static TypeStructure buildTypeStructureChain(TypeStructure structure) {
         if (null == structure) {
             return null;
         }
@@ -52,11 +51,11 @@ public class StructureResolver {
                     s.setTypeName(actualTypeArgument.getTypeName());
                     genericTypes.add(s);
                 }
-                buildTypeStructure(structure);
+                buildTypeStructureChain(structure);
             }
         } else { // 如果 genericTypes 不为空，表示非泛型部分已经解析过了，这时候就需要解析泛型部分
             for (TypeStructure subType : genericTypes) {
-                buildTypeStructure(subType);
+                buildTypeStructureChain(subType);
             }
         }
         return structure;
@@ -67,9 +66,9 @@ public class StructureResolver {
      * @param typeStructure 类型结构
      * @return 字符串形式的类型声明
      */
-    public static String read(TypeStructure typeStructure) {
+    public static String restoreLiteralTypeDeclaring(TypeStructure typeStructure) {
         LinkedList<String> queue = new LinkedList<>();
-        recursion(typeStructure, queue);
+        doRecursion(typeStructure, queue);
         StringBuilder sb = new StringBuilder();
         while (!queue.isEmpty()) {
             String item = queue.poll();
@@ -91,10 +90,15 @@ public class StructureResolver {
         return sb.toString();
     }
 
+    /**
+     * 从 TypeStructure 中找出所有的自定义类型
+     * @param typeStructure 要分析的 TypeStructure
+     * @return 自定义类型全类名集
+     */
     public static Set<String> findCustomType(TypeStructure typeStructure) {
         Set<String> names = new HashSet<>();
         LinkedList<String> queue = new LinkedList<>();
-        recursion(typeStructure, queue);
+        doRecursion(typeStructure, queue);
         while (!queue.isEmpty()) {
             String item = queue.poll();
             if (item.contains("<")) {
@@ -111,17 +115,18 @@ public class StructureResolver {
     }
 
     /**
-     * 递归解析 TypeStructure，将每一层的类型放入队列
+     * 递归解析 TypeStructure，将每一层的类型放入队列。之后按队列顺序读取类型即可还原出
+     * 字符串形式的完整类型声明。
      * @param typeStructure 类型结构
      * @param queue 队列
      */
-    private static void recursion(TypeStructure typeStructure, LinkedList<String> queue) {
+    private static void doRecursion(TypeStructure typeStructure, LinkedList<String> queue) {
         String rawName = typeStructure.getTypeName();
         List<TypeStructure> genericTypes = typeStructure.getGenericTypes();
         if (!genericTypes.isEmpty()) {
             queue.offer(rawName + "<");
             for (TypeStructure genericType : genericTypes) {
-                recursion(genericType, queue);
+                doRecursion(genericType, queue);
             }
         } else {
             queue.offer(rawName + ", ");

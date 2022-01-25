@@ -1,7 +1,6 @@
 package io.buyan.dubbo.viewer.structure;
 
 import io.buyan.dubbo.viewer.StructureResolver;
-import lombok.Data;
 
 import java.io.Serializable;
 
@@ -11,7 +10,6 @@ import java.io.Serializable;
  * @author Pengyu Gan
  * CreateDate 2022/1/21
  */
-@Data
 public class MethodParamStructure implements Serializable {
 
     /**
@@ -28,7 +26,22 @@ public class MethodParamStructure implements Serializable {
      * 字符串形式的参数表示
      */
     public String getParamDeclaring() {
-        return StructureResolver.read(typeStructure) + " " + name;
+        return StructureResolver.restoreLiteralTypeDeclaring(typeStructure) + " " + name;
     }
 
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public TypeStructure getTypeStructure() {
+        return typeStructure;
+    }
+
+    public void setTypeStructure(TypeStructure typeStructure) {
+        this.typeStructure = typeStructure;
+    }
 }
