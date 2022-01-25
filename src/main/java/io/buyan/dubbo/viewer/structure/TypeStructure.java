@@ -18,7 +18,7 @@ public class TypeStructure implements Serializable {
     /**
      * 非泛型部分的类型
      */
-    private Type rawType;
+    private transient Type rawType;
 
     /**
      * 非泛型部分的类型的名称

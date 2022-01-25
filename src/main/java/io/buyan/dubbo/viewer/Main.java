@@ -1,5 +1,6 @@
 package io.buyan.dubbo.viewer;
 
+import com.alibaba.fastjson.JSON;
 import io.buyan.dubbo.viewer.structure.Result;
 
 import java.io.File;
@@ -29,7 +30,7 @@ public class Main {
         ApiScanner apiScanner = new ApiScanner(files, basePackages);
 
         Result result = apiScanner.scanApi();
-//        System.out.println(JSON.toJSONString(result));
+        System.out.println(JSON.toJSONString(result));
 
 
     }
